@@ -13,12 +13,11 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     const incomingBody = req.body;
     
-    // Generate random UUIDs for each request to perfectly mimic the official CLI
+    // Generate UUIDs to maintain official CLI telemetry
     const sessionId = randomUUID();
     const projectId = randomUUID();
     const requestId = randomUUID();
 
-    // Spoof the exact internal CLI headers that OpenCode Zen looks for
     let targetHeaders = {
       'Content-Type': 'application/json',
       'User-Agent': 'opencode/latest/1.3.15/cli',
@@ -29,12 +28,16 @@ app.post('/v1/chat/completions', async (req, res) => {
       'Accept': '*/*'
     };
 
-    // Inject your OpenCode Zen API Key
-    if (process.env.OPENCODE_API_KEY) {
+    // Priority 1: Use the key sent from Janitor AI's API key field
+    // Priority 2: Fall back to Render's OPENCODE_API_KEY environment variable (if set)
+    const incomingAuth = req.headers['authorization'];
+    
+    if (incomingAuth && incomingAuth.trim() !== '' && !incomingAuth.includes('dummy')) {
+      targetHeaders['Authorization'] = incomingAuth;
+    } else if (process.env.OPENCODE_API_KEY) {
       targetHeaders['Authorization'] = `Bearer ${process.env.OPENCODE_API_KEY}`;
     }
 
-    // Forward the request to OpenCode Zen
     const fetchResponse = await fetch('https://opencode.ai/zen/v1/chat/completions', {
       method: 'POST',
       headers: targetHeaders,
@@ -59,5 +62,5 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`OpenCode CLI-Spoofed Proxy listening on port ${port}`);
+  console.log(`Dynamic Auth OpenCode Proxy running on port ${port}`);
 });
