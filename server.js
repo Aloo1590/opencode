@@ -9,27 +9,27 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// 1. GENERATE THESE ONCE ON STARTUP (Mimics a single long CLI session)
+const staticSessionId = randomUUID();
+const staticProjectId = randomUUID();
+
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const incomingBody = req.body;
     
-    // Generate UUIDs to maintain official CLI telemetry
-    const sessionId = randomUUID();
-    const projectId = randomUUID();
+    // 2. ONLY generate a new request ID per message
     const requestId = randomUUID();
 
     let targetHeaders = {
       'Content-Type': 'application/json',
       'User-Agent': 'opencode/latest/1.3.15/cli',
       'x-opencode-client': 'cli',
-      'x-opencode-session': sessionId,
-      'x-opencode-project': projectId,
+      'x-opencode-session': staticSessionId,
+      'x-opencode-project': staticProjectId,
       'x-opencode-request': requestId,
       'Accept': '*/*'
     };
 
-    // Priority 1: Use the key sent from Janitor AI's API key field
-    // Priority 2: Fall back to Render's OPENCODE_API_KEY environment variable (if set)
     const incomingAuth = req.headers['authorization'];
     
     if (incomingAuth && incomingAuth.trim() !== '' && !incomingAuth.includes('dummy')) {
@@ -62,5 +62,5 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Dynamic Auth OpenCode Proxy running on port ${port}`);
+  console.log(`Stable-Session OpenCode Proxy running on port ${port}`);
 });
