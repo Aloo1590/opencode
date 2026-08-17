@@ -1,66 +1,73 @@
-import express from 'express';
-import cors from 'cors';
-import { Readable } from 'stream';
-import { randomUUID } from 'crypto';
+// Generate these ONCE per worker isolate (Mimics a stable, long CLI session)
+const staticSessionId = crypto.randomUUID();
+const staticProjectId = crypto.randomUUID();
 
-const app = express();
-const port = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-
-// 1. GENERATE THESE ONCE ON STARTUP (Mimics a single long CLI session)
-const staticSessionId = randomUUID();
-const staticProjectId = randomUUID();
-
-app.post('/v1/chat/completions', async (req, res) => {
-  try {
-    const incomingBody = req.body;
-    
-    // 2. ONLY generate a new request ID per message
-    const requestId = randomUUID();
-
-    let targetHeaders = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'opencode/latest/1.3.15/cli',
-      'x-opencode-client': 'cli',
-      'x-opencode-session': staticSessionId,
-      'x-opencode-project': staticProjectId,
-      'x-opencode-request': requestId,
-      'Accept': '*/*'
-    };
-
-    const incomingAuth = req.headers['authorization'];
-    
-    if (incomingAuth && incomingAuth.trim() !== '' && !incomingAuth.includes('dummy')) {
-      targetHeaders['Authorization'] = incomingAuth;
-    } else if (process.env.OPENCODE_API_KEY) {
-      targetHeaders['Authorization'] = `Bearer ${process.env.OPENCODE_API_KEY}`;
+export default {
+  async fetch(request, env) {
+    // 1. Handle CORS for Janitor AI
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization"
+        }
+      });
     }
 
-    const fetchResponse = await fetch('https://opencode.ai/zen/v1/chat/completions', {
-      method: 'POST',
-      headers: targetHeaders,
-      body: JSON.stringify(incomingBody)
-    });
-
-    fetchResponse.headers.forEach((value, name) => {
-      res.setHeader(name, value);
-    });
-    res.status(fetchResponse.status);
-
-    if (fetchResponse.body) {
-      Readable.fromWeb(fetchResponse.body).pipe(res);
-    } else {
-      res.end();
+    if (request.method !== "POST") {
+      return new Response("Method not allowed", { status: 405 });
     }
-    
-  } catch (error) {
-    console.error('Proxy Error:', error);
-    res.status(500).json({ error: error.message });
+
+    try {
+      const incomingBody = await request.json();
+      
+      // 2. Generate a new request ID for this specific message
+      const requestId = crypto.randomUUID();
+
+      let targetHeaders = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'opencode/latest/1.3.15/cli',
+        'x-opencode-client': 'cli',
+        'x-opencode-session': staticSessionId,
+        'x-opencode-project': staticProjectId,
+        'x-opencode-request': requestId,
+        'Accept': '*/*'
+      };
+
+      // 3. Dynamic Auth: Use Janitor AI's API key field, or fallback to Cloudflare Secret
+      const incomingAuth = request.headers.get('authorization');
+      
+      if (incomingAuth && incomingAuth.trim() !== '' && !incomingAuth.includes('dummy')) {
+        targetHeaders['Authorization'] = incomingAuth;
+      } else if (env.OPENCODE_API_KEY) {
+        targetHeaders['Authorization'] = `Bearer ${env.OPENCODE_API_KEY}`;
+      }
+
+      // 4. Forward to OpenCode Zen
+      const fetchResponse = await fetch('https://opencode.ai/zen/v1/chat/completions', {
+        method: 'POST',
+        headers: targetHeaders,
+        body: JSON.stringify(incomingBody)
+      });
+
+      // 5. Stream response back to Janitor AI
+      const responseHeaders = new Headers(fetchResponse.headers);
+      responseHeaders.set("Access-Control-Allow-Origin", "*");
+
+      return new Response(fetchResponse.body, {
+        status: fetchResponse.status,
+        headers: responseHeaders
+      });
+
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
   }
-});
-
-app.listen(port, () => {
-  console.log(`Stable-Session OpenCode Proxy running on port ${port}`);
-});
+};
