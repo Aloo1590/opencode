@@ -8,12 +8,11 @@
 //   node opencode-relay.js
 //
 // Then in Janitor, set the API URL to:  http://<your-host>:3000/v1
-// and put your real OpenCode Go key in Janitor's API key field —
-// this relay just forwards whatever Authorization header it receives,
-// it doesn't store a key itself.
+// and put your real OpenCode Go key in Janitor's API key field.
 
 const express = require("express");
 const fetch = require("node-fetch");
+const { v4: uuidv4 } = require("uuid"); // Need to install uuid: npm install uuid
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -23,10 +22,23 @@ const OPENCODE_URL = "https://opencode.ai/zen/v1/chat/completions";
 const PORT = process.env.PORT || 3000;
 // --------------
 
+// Generate a persistent session ID for this proxy instance
+const SESSION_ID = uuidv4();
+const PROJECT_ID = uuidv4();
+
+// Middleware to add CORS headers for browser-based clients like Janitor
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.post("/v1/chat/completions", async (req, res) => {
   try {
-    // Pass through whatever Authorization header the caller sent
-    // (e.g. curl -H "Authorization: Bearer <key>", or Janitor's key field).
     const authHeader = req.headers["authorization"];
     if (!authHeader) {
       return res.status(401).json({ error: { message: "Missing Authorization header" } });
@@ -35,10 +47,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     const body = { ...req.body };
 
     // DeepSeek V4 Flash's thinking mode requires reasoning_content to be
-    // echoed back on assistant messages in multi-turn requests. Some
-    // clients (like Janitor) won't know to include this field, so we
-    // patch it in here if it's missing but a previous assistant message
-    // has a 'reasoning' or similar field available.
+    // echoed back on assistant messages in multi-turn requests.
     if (Array.isArray(body.messages)) {
       body.messages = body.messages.map((m) => {
         if (m.role === "assistant" && !m.reasoning_content) {
@@ -48,16 +57,24 @@ app.post("/v1/chat/completions", async (req, res) => {
       });
     }
 
+    // --- KEY CHANGE: Inject OpenCode CLI Headers ---
+    const opencodeHeaders = {
+      "Content-Type": "application/json",
+      Authorization: authHeader,
+      "User-Agent": "opencode/latest/1.3.15/cli",
+      "x-opencode-client": "cli",
+      "x-opencode-session": SESSION_ID,
+      "x-opencode-project": PROJECT_ID,
+      "x-opencode-request": uuidv4(),
+    };
+
     const upstream = await fetch(OPENCODE_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
+      headers: opencodeHeaders,
       body: JSON.stringify(body),
     });
 
-    // Stream support: if the client requested streaming, pipe it straight through.
+    // Stream support
     if (body.stream && upstream.body) {
       res.status(upstream.status);
       res.setHeader("Content-Type", "text/event-stream");
@@ -73,15 +90,26 @@ app.post("/v1/chat/completions", async (req, res) => {
   }
 });
 
-// Optional: expose /v1/models so clients that check model availability first don't choke
+// Optional: expose /v1/models
 app.get("/v1/models", async (req, res) => {
   try {
     const authHeader = req.headers["authorization"];
     if (!authHeader) {
       return res.status(401).json({ error: { message: "Missing Authorization header" } });
     }
+    
+    // --- Inject headers for models endpoint too ---
+    const opencodeHeaders = {
+      Authorization: authHeader,
+      "User-Agent": "opencode/latest/1.3.15/cli",
+      "x-opencode-client": "cli",
+      "x-opencode-session": SESSION_ID,
+      "x-opencode-project": PROJECT_ID,
+      "x-opencode-request": uuidv4(),
+    };
+
     const upstream = await fetch("https://opencode.ai/zen/v1/models", {
-      headers: { Authorization: authHeader },
+      headers: opencodeHeaders,
     });
     const data = await upstream.json();
     res.status(upstream.status).json(data);
@@ -92,5 +120,4 @@ app.get("/v1/models", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Relay listening on http://localhost:${PORT}`);
-  console.log(`Point Janitor's API URL to http://<your-host>:${PORT}/v1`);
 });
