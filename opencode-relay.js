@@ -12,7 +12,7 @@
 
 const express = require("express");
 const fetch = require("node-fetch");
-const { v4: uuidv4 } = require("uuid"); // Need to install uuid: npm install uuid
+const crypto = require("crypto"); // Built-in Node module, no need to install
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -22,9 +22,9 @@ const OPENCODE_URL = "https://opencode.ai/zen/v1/chat/completions";
 const PORT = process.env.PORT || 3000;
 // --------------
 
-// Generate a persistent session ID for this proxy instance
-const SESSION_ID = uuidv4();
-const PROJECT_ID = uuidv4();
+// Generate persistent IDs for this proxy instance using built-in crypto
+const SESSION_ID = crypto.randomUUID();
+const PROJECT_ID = crypto.randomUUID();
 
 // Middleware to add CORS headers for browser-based clients like Janitor
 app.use((req, res, next) => {
@@ -65,7 +65,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       "x-opencode-client": "cli",
       "x-opencode-session": SESSION_ID,
       "x-opencode-project": PROJECT_ID,
-      "x-opencode-request": uuidv4(),
+      "x-opencode-request": crypto.randomUUID(), // Generate a new ID for each request
     };
 
     const upstream = await fetch(OPENCODE_URL, {
@@ -105,7 +105,7 @@ app.get("/v1/models", async (req, res) => {
       "x-opencode-client": "cli",
       "x-opencode-session": SESSION_ID,
       "x-opencode-project": PROJECT_ID,
-      "x-opencode-request": uuidv4(),
+      "x-opencode-request": crypto.randomUUID(),
     };
 
     const upstream = await fetch("https://opencode.ai/zen/v1/models", {
